@@ -297,7 +297,8 @@ def main():
                 path_name_no_ver =  rm_hlt_version(path_name)
                 if path_name_no_ver not in hlt_sel:
                     hlt_sel[path_name_no_ver] = {}
-                hlt_sel[path_name_no_ver][menu_version] = path_sel
+                    hlt_sel[path_name_no_ver]['selection'] = {}
+                hlt_sel[path_name_no_ver]['selection'][menu_version] = path_sel
         del process
 
     print '''
@@ -328,13 +329,13 @@ Known issues:
         pre_sel = ""
         for menu_version in menu_versions:
             try:
-                if hlt_sel[path_name][menu_version]==pre_sel:
+                if hlt_sel[path_name]['selection'][menu_version]==pre_sel:
                     ver_str+=", "+menu_version
                 else:
                     if ver_str != "":
                         print "menu versions : {} <br>".format(ver_str)
                         print pre_sel
-                    pre_sel = hlt_sel[path_name][menu_version]
+                    pre_sel = hlt_sel[path_name]['selection'][menu_version]
                     ver_str = str(menu_version)
             except KeyError:
                 pass
