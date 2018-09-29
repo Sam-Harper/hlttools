@@ -38,9 +38,6 @@ def get_nice_var_name(name):
         "hltEgammaSolidTrackIso": "Pho Trk Iso (solid cone, cone<0.29)",
         "hltEgammaHoverERhoCorr" : "H (for H/E, cone<0.14, rho corr)",
         "hltEgammaPixelMatchVars:s2" : "PM S2",
-        
-        
-
     }.get(name, str(name))  
 
 
@@ -66,27 +63,30 @@ class EGammaStdCut:
         #do we need to rho_corr the individual terms (ie when ORing) or can we just at it at the end
         rho_corr_terms = self.term_combine_op=="||" and self.rho_term != 0.
         if self.const_term!=ignore_value:
-            label_str+=" {}".format(self.const_term)
             if rho_corr_terms:
-                label_str+=" {}*rho".format(self.rho_term)
+                label_str+=" {} + {}*rho".format(self.const_term,self.rho_term)
+            else:
+                label_str+=" {}".format(self.const_term)
             first_term = False
         if self.linear_term!=ignore_value:
             if not first_term: label_str+=" {} ".format(self.term_combine_op)
             if rho_corr_terms:
-                label_str+=" {} * {}".format(self.linear_term,self.divide_by_var)
-            else:
                 label_str+=" ({} + {}*rho) * {}".format(self.linear_term,self.rho_term,self.divide_by_var)
+            else:
+                label_str+=" {} * {}".format(self.linear_term,self.divide_by_var)
+
             first_term = False
         if self.quad_term!=ignore_value:
             if not first_term: label_str+=" {} ".format(self.term_combine_op)
             if rho_corr_terms:
-                label_str+=" {} * {}^{{2}}".format(self.quad_term,self.divide_by_var)
-            else:
                 label_str+=" ({} + {}*rho) * {}^{{2}}".format(self.quad_term,self.rho_term,self.divide_by_var)
+            else:
+                label_str+=" {} * {}^{{2}}".format(self.quad_term,self.divide_by_var)
+
             first_term = False
 
         if  not rho_corr_terms and self.rho_term!=0.:
-            label_str+=" + {}*rho"
+            label_str+=" + {}*rho".format(self.rho_term)
             first_term = False
 
         #we need to deal with the special case where its all zeros
@@ -127,12 +127,12 @@ class EGammaCut:
             op_str = "<=" if filt.lessThan.value() else ">="
             et_str = "E_{T}" if filt.useEt.value() else "E" 
             term_op = "+"
-            rho_term = 0.
+            rho_term = filt.effectiveAreas.value() if filt.doRhoCorrection.value()  else [0.,0.]
             eta_low_edges = filt.absEtaLowEdges.value()
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB1").value(),filt.getParameter("thrOverEEB1").value(),filt.getParameter("thrOverE2EB1").value(),rho_term,term_op,min_eta=eta_low_edges[0],max_eta=eta_low_edges[1]))
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB2").value(),filt.getParameter("thrOverEEB2").value(),filt.getParameter("thrOverE2EB2").value(),rho_term,term_op,min_eta=eta_low_edges[1],max_eta=eta_low_edges[2]))
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE1").value(),filt.getParameter("thrOverEEE1").value(),filt.getParameter("thrOverE2EE1").value(),rho_term,term_op,min_eta=eta_low_edges[2],max_eta=eta_low_edges[3]))
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE2").value(),filt.getParameter("thrOverEEE2").value(),filt.getParameter("thrOverE2EE2").value(),rho_term,term_op,min_eta=eta_low_edges[3],max_eta=2.65))
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB1").value()[0],filt.getParameter("thrOverEEB1").value()[0],filt.getParameter("thrOverE2EB1").value()[0],rho_term[0],term_op,min_eta=eta_low_edges[0],max_eta=eta_low_edges[1]))
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB2").value()[0],filt.getParameter("thrOverEEB2").value()[0],filt.getParameter("thrOverE2EB2").value()[0],rho_term[1],term_op,min_eta=eta_low_edges[1],max_eta=eta_low_edges[2]))
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE1").value()[0],filt.getParameter("thrOverEEE1").value(),filt.getParameter("thrOverE2EE1").value()[0],rho_term[2],term_op,min_eta=eta_low_edges[2],max_eta=eta_low_edges[3]))
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE2").value()[0],filt.getParameter("thrOverEEE2").value()[0],filt.getParameter("thrOverE2EE2").value()[0],rho_term[3],term_op,min_eta=eta_low_edges[3],max_eta=2.65))
             
         
         
@@ -150,10 +150,31 @@ class EGammaCut:
             op_str = "<=" if filt.getParameter("lessThan").value() else ">="
             et_str = "E_{T}" if filt.getParameter("useEt").value() else "E" 
             term_op = "||" if  filt.type_() == "HLTEgammaGenericFilter" else "+"
-            rho_term = 0.
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value(),filt.getParameter("thrOverEEB").value(),filt.getParameter("thrOverE2EB").value(),rho_term,term_op,min_eta=0,max_eta=1.479))
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value(),filt.getParameter("thrOverEEE").value(),filt.getParameter("thrOverE2EE").value(),rho_term,term_op,min_eta=0,max_eta=2.65))
+            rho_term = filt.effectiveAreas.value() if filt.doRhoCorrection.value()  else [0.,0.]
+
+            if "energyLowEdges" in filt.parameterNames_():
+                #2017 style filters where we bin for some reason as a function of E
+                #right we're going to simplify this and limit ourselfs to certain cases
+                #mainly as I think other cases wont occur and so not to waste time coding for them
+                if len(filt.energyLowEdges.value())!=1 or filt.energyLowEdges.value()[0]!=0.:
+                    raise ValueError("can only handle the case of a single energy threshold at zero, for "+str(filt)+" got "+str(filt.energyLowEdges.value()))
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value()[0],filt.getParameter("thrOverEEB").value()[0],filt.getParameter("thrOverE2EB").value()[0],rho_term[0],term_op,min_eta=0,max_eta=1.479))
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value()[0],filt.getParameter("thrOverEEE").value()[0],filt.getParameter("thrOverE2EE").value()[0],rho_term[1],term_op,min_eta=0,max_eta=2.65))
            
+            else:
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value(),filt.getParameter("thrOverEEB").value(),filt.getParameter("thrOverE2EB").value(),rho_term[0],term_op,min_eta=0,max_eta=1.479))
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value(),filt.getParameter("thrOverEEE").value(),filt.getParameter("thrOverE2EE").value(),rho_term[1],term_op,min_eta=0,max_eta=2.65))
+         
+    def eta_bins(self):
+        eta_set = set()
+        for cut in self.cuts:
+            try:
+                eta_set.add(cut.min_eta)
+                eta_set.add(cut.max_eta)
+            except AttributeError:
+                pass
+        return eta_set
+
     def get_cut(self,eta):
         for cut in self.cuts:
             try:
@@ -172,7 +193,7 @@ class EGammaCutColl:
         self.min_et_eb = 0
         self.min_et_ee = 0
 
-    def fill(self,process,filter_names,l1_seeded=True):
+    def fill(self,process,filter_names):
         for filter_name in filter_names:
             filt = getattr(process,filter_name['name'])
             if filt.type_() == "HLTEgammaEtFilter":
@@ -193,6 +214,10 @@ class EGammaCutColl:
                 self.cuts.append(EGammaCut(filt,subchain=filter_name['subchain'],ignored=filter_name['modifier']=="ignore"
 ))
                 self.ncands = max(self.ncands,filt.getParameter("ncandcut").value())
+                cut_eta_bins =  self.cuts[-1].eta_bins()
+                for eta in cut_eta_bins:
+                    if eta not in self.eta_bins: self.eta_bins.append(eta)
+                self.eta_bins.sort()
 
     def __str__(self):
         out_str = "E_{{T}} > {} GeV (EB), > {} GeV (EE), #cands = {}, L1 seeded = {}\n".format(self.min_et_eb,self.min_et_ee,self.ncands,self.l1_seeded)
@@ -292,7 +317,7 @@ def get_path_sel(process,path_name):
     chains_filter_names = split_into_chains(process,str(path).split("+"))
     for chain in chains_filter_names:
         cutcoll = EGammaCutColl()
-        cutcoll.fill(l1_seeded=True,process=process,filter_names=chain)
+        cutcoll.fill(process=process,filter_names=chain)
            
         sel_str += str(cutcoll) +"\n"
     return sel_str
@@ -359,6 +384,7 @@ The information on this twiki is thought to be accurate but again as its auto ge
 Known issues: 
    * this is simply a python file which parses the HLT and tries to print what it things the HLT would do when given this config
    * variable definations are hard coded and do not evolve in time
+      * main issue is tracking when rho correction went from variable to filter
    * code changes in modules may be not taken into account (although unlikely)
    * does not handle DZ, path leg combination filters
    * does not handle inferor leptons or anything icky and hadronic
