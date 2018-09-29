@@ -159,126 +159,6 @@ class EGammaCutColl:
             out_str+="\n"
         return out_str
     
-class EGammaFilter:
-    def __init__(self,filt_mod=None):
-        if(filt_mod): self.fill(filt_mod)
-        
-    def fill(self,filt_mod):
-        self.filt_type = filt_mod.type_()
-        self.cut_params = {}
-        self.var = None
-        if self.filt_type in ["HLTEgammaGenericFilter","HLTEgammaGenericQuadraticFilter"]:
-            self.cut_params = filt_mod.parameters_()
-            self.var = filt_mod.varTag.value().replace("Unseeded","")
-            #now remove the parameters which are not part of the selection from cut_params
-            for x in ['saveTags','l1EGCand','candTag','ncandcut']: del self.cut_params[x]
-            #now clean large values (999 is the same as 99999 etc)
-            for param in self.cut_params:
-                if type(self.cut_params[param]).__name__=="double" and self.cut_params[param].value()>990:
-                    self.cut_params[param].setValue(999.)
-
-        elif self.filt_type=="HLTElectronPixelMatchFilter":
-            cut_params = filt_mod.parameters_()
-            self.cut_params = {"useS" : cut_params["useS"],"pixelVeto" : cut_params["pixelVeto"] }
-            self.var = "pixelMatch"
-
-        else:
-            print "debug",self.filt_type,"not recognised"
-       
-    def __eq__(self, other):
-        return self.filt_type == other.filt_type and self.cut_params == other.cut_params
-        if self.filt_type == other.filt_type:
-            same = True
-            for cut_param_name in self.cut_params:
-                if self.cut_params[cut_param_name] != other.cut_params[cut_param_name]:
-                    print "miss match",self.var,cut_param_name," self ",self.cut_params[cut_param_name],"other",other.cut_params[cut_param_name]
-                    same = False
-            return same
-        return False
-                
-            
-    def __ne__(self, other):
-        return not self.__eq__(other)
-    
-    def __str__(self):
-        if self.filt_type=="HLTEgammaGenericFilter":
-            op_str = "<=" if self.cut_params["lessThan"].value() else ">="
-            et_str = "E_{T}" if self.cut_params["useEt"].value() else "E"
-            var_name = get_nice_var_name(self.var)
-            cut_barrel = EGammaStdCut(op_str,et_str,self.cut_params["thrRegularEB"].value(),self.cut_params["thrOverEEB"].value(),self.cut_params["thrOverE2EB"].value())
-            cut_endcap = EGammaStdCut(op_str,et_str,self.cut_params["thrRegularEE"].value(),self.cut_params["thrOverEEE"].value(),self.cut_params["thrOverE2EE"].value())
-            return  "{} {} (EB) {} (EE)".format(var_name,cut_barrel.label(),cut_endcap.label())
-        else:
-            return ""
-class EGammaFilterChain:
-    def __init__(self):
-        self.filters = []
-        self.paths_using = []
-    def add_filter(self,filt_mod):
-        if filt_mod.type_() in ["HLTEgammaGenericFilter",'HLTEgammaGenericQuadraticFilter','HLTElectronPixelMatchFilter']:
-            self.filters.append(EGammaFilter(filt_mod))
-        elif filt_mod.type_() not in ['HLT1Photon','HLTEgammaEtFilter']:
-            print "debug",filt_mod.type_(),"not recognised"
-
-    def add_path(self,path):
-        self.paths_using.append(path)
-
-    def __eq__(self,other):
-        return self.filters == other.filters
-
-    def __ne__(self,other):
-        return not self.__eq__(other)
-
-    def __getitem__(self,index):
-        return self.filters[index]
-
-    def __str__(self):
-        print_str = "start chain "+str(self.paths_using)
-        for filt in self.filters:
-            print_str+="\n  "+str(filt)
-        return print_str
-
-def printHLT1Photon(filt,indent=6):
-    min_pt = filt.getParameter("MinPt").value()
-    min_e = filt.getParameter("MinE").value()
-    max_eta  = filt.getParameter("MaxEta").value()
-    label_str=""
-    if min_pt!=-1: label_str+="{}E_{{T}} >= {}".format(" "*indent,min_pt)
-    if min_e!=-1: label_str+=" E >= {}".format(min_e)
-    if max_eta!=-1: label_str+=" |eta| <= {}".format(max_eta)
-    print label_str
-
-def printHLTEgammaTriggerFilterObjectWrapper(filt,indent=6):
-    print "{}L1 match NOT required".format(" "*indent)
-
-def printHLTEgammaL1TMatchFilterRegional(filt,indent=6):
-    print "{}L1 match required".format(" "*indent)
-
-def printHLTEgammaEtFilter(filt,indent=6):
-    print "{}E_{{T}} >= {} (EB) >= {} (EE)".format(" "*indent,filt.getParameter("etcutEB").value(),filt.getParameter("etcutEE").value())
-    
-def printHLTElectronPixelMatchFilter(filt,indent=6):
-    label_str= "{}PixelMatch".format(" "*indent)
-    if filt.getParameter("useS").value(): label_str+=" using S2 additional matching"
-    label_str+= " required" if not filt.getParameter("pixelVeto").value() else " vetoed"
-    print label_str
-
-def printHLTEgammaGenericQuadraticFilter(filt,indent=6):
-    op_str = "<=" if filt.getParameter("lessThan").value() else ">="
-    et_str = "E_{T}" if filt.getParameter("useEt").value() else "E"
-    var_name = get_nice_var_name(filt.getParameter("varTag").value())
-    cut_barrel = EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value(),filt.getParameter("thrOverEEB").value(),filt.getParameter("thrOverE2EB").value(),"+")
-    cut_endcap = EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value(),filt.getParameter("thrOverEEE").value(),filt.getParameter("thrOverE2EE").value(),"+")
-    print "{}{} {} (EB) {} (EE)".format(" "*indent,var_name,cut_barrel.label(),cut_endcap.label())
-
-def printHLTEgammaGenericFilter(filt,indent=6):
-    op_str = "<=" if filt.getParameter("lessThan").value() else ">="
-    et_str = "E_{T}" if filt.getParameter("useEt").value() else "E"
-    var_name = get_nice_var_name(filt.getParameter("varTag").value())
-    cut_barrel = EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value(),filt.getParameter("thrOverEEB").value(),filt.getParameter("thrOverE2EB").value())
-    cut_endcap = EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value(),filt.getParameter("thrOverEEE").value(),filt.getParameter("thrOverE2EE").value())
-    print "{}{} {} (EB) {} (EE)".format(" "*indent,var_name,cut_barrel.label(),cut_endcap.label())
-
 def rm_filter_modifiers(filt_name):
     filt_start = filt_name.find("(")
     filt_end = filt_name.rfind(")")
@@ -351,14 +231,11 @@ def get_path_sel(process,path_name):
     
     filter_chains = []
     chains_filter_names = split_into_chains(process,str(path).split("+"))
-    #print path_name
-   # print "---++ "+rm_hlt_version(path_name)+" test"
     for chain in chains_filter_names:
         cutcoll = EGammaCutColl()
         cutcoll.fill(l1_seeded=True,process=process,filter_names=chain)
            
         sel_str += str(cutcoll) +"\n"
-    #print sel_str
     return sel_str
 
 
