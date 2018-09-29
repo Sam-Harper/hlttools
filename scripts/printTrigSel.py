@@ -43,13 +43,15 @@ def get_nice_var_name(name):
 
     }.get(name, str(name))  
 
+
 class EGammaStdCut:
-    def __init__(self,op_type="",divide_by_var="E",const_term=-1.0,linear_term=-1.0,quad_term=-1.0,term_combine_op="||",min_eta = 0, max_eta = 2.65):
+    def __init__(self,op_type="",divide_by_var="E",const_term=-1.0,linear_term=-1.0,quad_term=-1.0,rho_term=0,term_combine_op="||",min_eta = 0, max_eta = 2.65):
         self.op_type = op_type
         self.divide_by_var = divide_by_var
         self.const_term = const_term
         self.linear_term = linear_term
         self.quad_term = quad_term
+        self.rho_term = rho_term
         self.term_combine_op = term_combine_op
         self.min_eta = min_eta
         self.max_eta = max_eta
@@ -61,16 +63,30 @@ class EGammaStdCut:
         label_str = "{}".format(self.op_type)
         first_term = True
         ignore_value = -1.0 if self.term_combine_op=="||" else 0.
+        #do we need to rho_corr the individual terms (ie when ORing) or can we just at it at the end
+        rho_corr_terms = self.term_combine_op=="||" and self.rho_term != 0.
         if self.const_term!=ignore_value:
             label_str+=" {}".format(self.const_term)
+            if rho_corr_terms:
+                label_str+=" {}*rho".format(self.rho_term)
             first_term = False
         if self.linear_term!=ignore_value:
             if not first_term: label_str+=" {} ".format(self.term_combine_op)
-            label_str+=" {} * {}".format(self.linear_term,self.divide_by_var)
+            if rho_corr_terms:
+                label_str+=" {} * {}".format(self.linear_term,self.divide_by_var)
+            else:
+                label_str+=" ({} + {}*rho) * {}".format(self.linear_term,self.rho_term,self.divide_by_var)
             first_term = False
         if self.quad_term!=ignore_value:
             if not first_term: label_str+=" {} ".format(self.term_combine_op)
-            label_str+=" {} * {}^{{2}}".format(self.quad_term,self.divide_by_var)
+            if rho_corr_terms:
+                label_str+=" {} * {}^{{2}}".format(self.quad_term,self.divide_by_var)
+            else:
+                label_str+=" ({} + {}*rho) * {}^{{2}}".format(self.quad_term,self.rho_term,self.divide_by_var)
+            first_term = False
+
+        if  not rho_corr_terms and self.rho_term!=0.:
+            label_str+=" + {}*rho"
             first_term = False
 
         #we need to deal with the special case where its all zeros
@@ -93,7 +109,33 @@ class EGammaCut:
                 s2_cal = lambda x : "{:.1f}".format((math.atanh(x)*10)**2) if x<1.0 else "inf" if x==1.0 else "-inf"  
                 cut+=" with old s2 < {} BPIX, < {} BPIX-FPIX, < {} FPIX".format( s2_cal(filt.tanhSO10BarrelThres.value()),s2_cal(filt.tanhSO10InterThres.value()),s2_cal(filt.tanhSO10ForwardThres.value()))
             self.cuts = [cut]
+        elif filt.type_()=="HLTDisplacedEgammaFilter":
+            self.var = "displaced ID"
+            self.cuts = "pass"
             
+        elif filt.type_()=="HLTEgammaGenericQuadraticEtaFilter":
+            self.cuts = []  
+            self.var = get_nice_var_name(filt.getParameter("varTag").value().replace("Unseeded","")) 
+            #right we're going to simplify this and limit ourselfs to certain cases
+            #mainly as I think other cases wont occur and so not to waste time coding for them
+            if len(filt.energyLowEdges.value())!=1 or filt.energyLowEdges.value()[0]!=0.:
+                raise ValueError("can only handle the case of a single energy threshold at zero, for "+str(filt)+" got "+str(filt.energyLowEdges.value()))
+            if len(filt.absEtaLowEdges.value())!=4 or filt.etaBoundaryEB12.value()!=filt.absEtaLowEdges.value()[1] or filt.etaBoundaryEE12.value()!=filt.absEtaLowEdges.value()[3] or filt.absEtaLowEdges.value()[0]!=0. or filt.absEtaLowEdges.value()[2]!=1.479:
+                raise ValueError("can only handle the case where the rho corr bins are exactly the same as a cut bins\n"+filt.dumpPython())
+            
+
+            op_str = "<=" if filt.lessThan.value() else ">="
+            et_str = "E_{T}" if filt.useEt.value() else "E" 
+            term_op = "+"
+            rho_term = 0.
+            eta_low_edges = filt.absEtaLowEdges.value()
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB1").value(),filt.getParameter("thrOverEEB1").value(),filt.getParameter("thrOverE2EB1").value(),rho_term,term_op,min_eta=eta_low_edges[0],max_eta=eta_low_edges[1]))
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB2").value(),filt.getParameter("thrOverEEB2").value(),filt.getParameter("thrOverE2EB2").value(),rho_term,term_op,min_eta=eta_low_edges[1],max_eta=eta_low_edges[2]))
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE1").value(),filt.getParameter("thrOverEEE1").value(),filt.getParameter("thrOverE2EE1").value(),rho_term,term_op,min_eta=eta_low_edges[2],max_eta=eta_low_edges[3]))
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE2").value(),filt.getParameter("thrOverEEE2").value(),filt.getParameter("thrOverE2EE2").value(),rho_term,term_op,min_eta=eta_low_edges[3],max_eta=2.65))
+            
+        
+        
         else:
         #    print filt,filt.type_()
             if "varTag" in filt.parameterNames_():
@@ -108,8 +150,9 @@ class EGammaCut:
             op_str = "<=" if filt.getParameter("lessThan").value() else ">="
             et_str = "E_{T}" if filt.getParameter("useEt").value() else "E" 
             term_op = "||" if  filt.type_() == "HLTEgammaGenericFilter" else "+"
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value(),filt.getParameter("thrOverEEB").value(),filt.getParameter("thrOverE2EB").value(),term_op,min_eta=0,max_eta=1.479))
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value(),filt.getParameter("thrOverEEE").value(),filt.getParameter("thrOverE2EE").value(),term_op,min_eta=0,max_eta=2.65))
+            rho_term = 0.
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value(),filt.getParameter("thrOverEEB").value(),filt.getParameter("thrOverE2EB").value(),rho_term,term_op,min_eta=0,max_eta=1.479))
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value(),filt.getParameter("thrOverEEE").value(),filt.getParameter("thrOverE2EE").value(),rho_term,term_op,min_eta=0,max_eta=2.65))
            
     def get_cut(self,eta):
         for cut in self.cuts:
@@ -176,13 +219,15 @@ def rm_filter_modifiers(filt_name):
 def is_valid_egid_filt_type(filt): 
     if type(filt).__name__=="EDFilter":
         #so we have a black list rather than a white list so we dont miss new E/gamma ID modules
-        if filt.type_() in ['HLTTriggerTypeFilter','HLTBool','HLTPrescaler','HLTTriggerTypeFilter','HLTL1TSeed',"CaloJetSelector","CandViewCountFilter","CandViewSelector","EtMinCaloJetSelector","EtaRangeCaloJetSelector","HLT1CaloJet","HLT1CaloMET","HLT1PFJet","HLT1PFMET","HLT1PFTau","HLT2PFJetPFJet","HLT2PhotonMET","HLT2PhotonPFMET","HLT2PhotonPFTau","HLT2PhotonPhotonDZ","HLT2PhotonTau","HLTCaloJetTag","HLTCaloJetVBFFilter","HLTEgammaAllCombMassFilter","HLTEgammaCombMassFilter","HLTEgammaDoubleLegCombFilter","HLTElectronMuonInvMassFilter","HLTHtMhtFilter","HLTMhtFilter","HLTMuonIsoFilter","HLTMuonL1TFilter","HLTMuonL2FromL1TPreFilter","HLTMuonL3PreFilter","HLTPFJetCollectionsFilter","HLTPFJetTag","HLTPFTauPairDzMatchFilter","HLTPMMassFilter","JetVertexChecker","LargestEtCaloJetSelector","PFTauSelector","PrimaryVertexObjectFilter","VertexSelector",'HLTEgammaL1TMatchFilterRegional','HLTEgammaTriggerFilterObjectWrapper',"HLT2PhotonMuonDZ","HLT2MuonPhotonDZ","MuonSelector","HLTMuonDimuonL3Filter","HLTDisplacedmumuFilter"]: return False
+        if filt.type_() in ['HLTTriggerTypeFilter','HLTBool','HLTPrescaler','HLTTriggerTypeFilter','HLTL1TSeed',"CaloJetSelector","CandViewCountFilter","CandViewSelector","EtMinCaloJetSelector","EtaRangeCaloJetSelector","HLT1CaloJet","HLT1CaloMET","HLT1PFJet","HLT1PFMET","HLT1PFTau","HLT2PFJetPFJet","HLT2PhotonMET","HLT2PhotonPFMET","HLT2PhotonPFTau","HLT2PhotonPhotonDZ","HLT2PhotonTau","HLTCaloJetTag","HLTCaloJetVBFFilter","HLTEgammaAllCombMassFilter","HLTEgammaCombMassFilter","HLTEgammaDoubleLegCombFilter","HLTElectronMuonInvMassFilter","HLTHtMhtFilter","HLTMhtFilter","HLTMuonIsoFilter","HLTMuonL1TFilter","HLTMuonL2FromL1TPreFilter","HLTMuonL3PreFilter","HLTPFJetCollectionsFilter","HLTPFJetTag","HLTPFTauPairDzMatchFilter","HLTPMMassFilter","JetVertexChecker","LargestEtCaloJetSelector","PFTauSelector","PrimaryVertexObjectFilter","VertexSelector",'HLTEgammaL1TMatchFilterRegional','HLTEgammaTriggerFilterObjectWrapper',"HLT2PhotonMuonDZ","HLT2MuonPhotonDZ","MuonSelector","HLTMuonDimuonL3Filter","HLTDisplacedmumuFilter","HLTMuonTrkL1TFilter","HLT2MuonMuonDZ","HLTPFJetVBFFilter"]: return False
         else: return True
     else: return False
 
 def get_prev_filt_name(filt):
-    if filt.type_() in ['HLTEgammaGenericFilter','HLTEgammaGenericQuadraticFilter','HLTElectronPixelMatchFilter']:
+    if filt.type_() in ['HLTEgammaGenericFilter','HLTEgammaGenericQuadraticFilter','HLTElectronPixelMatchFilter','HLTEgammaGenericQuadraticEtaFilter']:
         return filt.candTag.value()
+    elif filt.type_() in ['HLTDisplacedEgammaFilter']:
+        return filt.inputTag.value();
     elif filt.type_() in ['HLTEgammaL1TMatchFilterRegional','HLT1Photon','HLTEgammaTriggerFilterObjectWrapper']:
         return None
     elif filt.type_() in ['HLTEgammaEtFilter']:
@@ -282,6 +327,7 @@ def main():
 #    process = getattr(mod,"process")
 
     menu_versions = ["2016_v1p1","2016_v1p2","2016_v2p1","2016_v2p2","2016_v3p0","2016_v3p1","2016_v4p1","2016_v4p2"]
+    menu_versions = ["2017_v4p2"]
  #   menu_versions = ["2018_test"]
     hlt_sel = {}
 
