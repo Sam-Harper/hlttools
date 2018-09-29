@@ -150,8 +150,11 @@ class EGammaCut:
             op_str = "<=" if filt.getParameter("lessThan").value() else ">="
             et_str = "E_{T}" if filt.getParameter("useEt").value() else "E" 
             term_op = "||" if  filt.type_() == "HLTEgammaGenericFilter" else "+"
-            rho_term = filt.effectiveAreas.value() if filt.doRhoCorrection.value()  else [0.,0.]
-
+            try:
+                rho_term = filt.effectiveAreas.value() if filt.doRhoCorrection.value()  else [0.,0.]
+            except AttributeError:
+                #no rho correction...
+                rho_term = [0.,0.]
             if "energyLowEdges" in filt.parameterNames_():
                 #2017 style filters where we bin for some reason as a function of E
                 #right we're going to simplify this and limit ourselfs to certain cases
@@ -216,7 +219,9 @@ class EGammaCutColl:
                 self.ncands = max(self.ncands,filt.getParameter("ncandcut").value())
                 cut_eta_bins =  self.cuts[-1].eta_bins()
                 for eta in cut_eta_bins:
-                    if eta not in self.eta_bins: self.eta_bins.append(eta)
+                    #filters tend to have a slight disagreement where the barrel/endcap start end is
+                    #so we fuzz it
+                    if eta not in self.eta_bins and eta<2.5 and not(eta>1.47 and eta<1.55): self.eta_bins.append(eta)
                 self.eta_bins.sort()
 
     def __str__(self):
@@ -352,7 +357,7 @@ def main():
 #    process = getattr(mod,"process")
 
     menu_versions = ["2016_v1p1","2016_v1p2","2016_v2p1","2016_v2p2","2016_v3p0","2016_v3p1","2016_v4p1","2016_v4p2"]
-    menu_versions = ["2017_v4p2"]
+    menu_versions = ["2017_v1p1","2017_v1p2","2017_v2p0","2017_v2p1","2017_v2p2","2017_v3p0","2017_v3p1","2017_v3p2","2017_v4p0","2017_v4p1","2017_v4p2"]
  #   menu_versions = ["2018_test"]
     hlt_sel = {}
 
@@ -386,6 +391,7 @@ Known issues:
    * variable definations are hard coded and do not evolve in time
       * main issue is tracking when rho correction went from variable to filter
    * code changes in modules may be not taken into account (although unlikely)
+   * there is some disagreement on what constitutes barrel/endcap start end (eg 1.479, 1.5 , 2.5, 2.65) so to make life easier, we fuzz those boundaries so exact eta values may be slightly off,to be fixed
    * does not handle DZ, path leg combination filters
    * does not handle inferor leptons or anything icky and hadronic
    * should work for standard paths but werid complex paths may have edge cases
