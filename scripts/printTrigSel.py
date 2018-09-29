@@ -203,25 +203,7 @@ def split_into_chains(process,filt_names):
                 chain.append(filt_name)
     return chains
 
-def process_filter_sel(filt,indent=6):
-    filt_type = filt.type_()
-    if filt_type in ["HLTBool","HLTPrescaler","HLTTriggerTypeFilter","HLTL1TSeed"]: return 
-    try:
-        globals()["print"+filt.type_()](filt,indent=6)
-    except KeyError:
-        print "{}filter type {} does not have a defined print function print{}, please add it".format(" "*indent,filt.type_(),filt.type_())
 
-def print_filter_sel(process,path_name):
-    print "  {}:".format(path_name)
-    path = getattr(process,path_name)    
-
-    for filter_name in str(path).split("+"):
-        if filter_name.find("ignore(")==0:
-            print "{}skipping {} as can not yet handle ignored filters".format(" "*6,filter_name)
-            continue
-        filt = getattr(process,filter_name)
-        if type(filt).__name__=="EDFilter":
-            process_filter_sel(filt,indent=6)
 
 
 def get_path_sel(process,path_name):
