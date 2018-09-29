@@ -88,7 +88,7 @@ class EGammaCut:
         self.ignored = ignored
         if filt.type_()=="HLTElectronPixelMatchFilter":
             self.var = "pixel match"
-            cut = "pass" if filt.pixelVeto.value() else "veto" 
+            cut = "pass" if filt.pixelVeto.value()==False else "veto" 
             if filt.useS.value():
                 s2_cal = lambda x : "{:.1f}".format((math.atanh(x)*10)**2) if x<1.0 else "inf" if x==1.0 else "-inf"  
                 cut+=" with old s2 < {} BPIX, < {} BPIX-FPIX, < {} FPIX".format( s2_cal(filt.tanhSO10BarrelThres.value()),s2_cal(filt.tanhSO10InterThres.value()),s2_cal(filt.tanhSO10ForwardThres.value()))
@@ -338,7 +338,7 @@ Known issues:
                     ver_str = str(menu_version)
             except KeyError:
                 pass
-        print "menu versions : {} <br>".format(ver_str)
+        print "menu versions : {} <br>".format(ver_str.replace("p","."))
         print pre_sel
     with open(args.out,'w') as f:
         json.dump(hlt_sel,f)
