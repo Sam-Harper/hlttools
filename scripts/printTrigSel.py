@@ -35,7 +35,9 @@ def get_nice_var_name(name):
         "hltEgammaR9ID":"R9 (fractions)",
         "hltEgammaR9ID:r95x5":"R9 (full5x5)",
         "hltEgammaHollowTrackIso":"Pho Trk Iso (hollow cone, cone<0.29)",
+        "hltEgammaSolidTrackIso": "Pho Trk Iso (solid cone, cone<0.29)",
         "hltEgammaHoverERhoCorr" : "H (for H/E, cone<0.14, rho corr)",
+        "hltEgammaPixelMatchVars:s2" : "PM S2",
         
         
 
@@ -81,7 +83,9 @@ class EGammaStdCut:
         return str(self)
 
 class EGammaCut:
-    def __init__(self,filt=None):
+    def __init__(self,filt=None,subchain=0,ignored=False):
+        self.subchain = subchain
+        self.ignored = ignored
         if filt.type_()=="HLTElectronPixelMatchFilter":
             self.var = "pixel match"
             cut = "pass" if filt.pixelVeto.value() else "veto" 
@@ -127,7 +131,7 @@ class EGammaCutColl:
 
     def fill(self,process,filter_names,l1_seeded=True):
         for filter_name in filter_names:
-            filt = getattr(process,filter_name)
+            filt = getattr(process,filter_name['name'])
             if filt.type_() == "HLTEgammaEtFilter":
                 self.min_et_eb = max(self.min_et_eb,filt.getParameter("etcutEB").value())
                 self.min_et_ee = max(self.min_et_ee,filt.getParameter("etcutEE").value())
@@ -143,7 +147,8 @@ class EGammaCutColl:
                 self.eta_bins[-1] = min(self.eta_bins[-1],filt.getParameter("MaxEta").value())
                 self.l1_seeded = filt.getParameter("inputTag").value().find("Unseeded")==-1
             else:
-                self.cuts.append(EGammaCut(filt))
+                self.cuts.append(EGammaCut(filt,subchain=filter_name['subchain'],ignored=filter_name['modifier']=="ignore"
+))
                 self.ncands = max(self.ncands,filt.getParameter("ncandcut").value())
 
     def __str__(self):
@@ -153,17 +158,20 @@ class EGammaCutColl:
             out_str += "  *{} < &#124;&eta;&#124; < {}*  |".format(self.eta_bins[binnr],self.eta_bins[binnr+1])
         out_str += "\n"
         for cut in self.cuts:
-            out_str += "|  {}  | ".format(cut.var)
+            colours = ['%TEAL%','%PURPLE%','%MAROON%']
+            colour_nr = cut.subchain % len(colours)
+            colour_str = "" if not cut.ignored else colours[colour_nr]
+            out_str += "|  {}{}  | ".format(colour_str,cut.var)
             for binnr in range(0,len(self.eta_bins)-1):
-                out_str += "  {}  |".format(cut.get_cut(self.eta_bins[binnr]))
+                out_str += "  {}{}  |".format(colour_str,cut.get_cut(self.eta_bins[binnr]))
             out_str+="\n"
         return out_str
     
 def rm_filter_modifiers(filt_name):
     filt_start = filt_name.find("(")
     filt_end = filt_name.rfind(")")
-    if filt_start!=-1: return filt_name[filt_start+1:filt_end]
-    else: return str(filt_name)
+    if filt_start!=-1: return filt_name[filt_start+1:filt_end],filt_name[0:filt_start]
+    else: return str(filt_name),None
 
 def is_valid_egid_filt_type(filt): 
     if type(filt).__name__=="EDFilter":
@@ -187,20 +195,44 @@ def get_prev_filt_name(filt):
     
 
 def split_into_chains(process,filt_names):
+    """
+    function takes the list of filters (which are assumed to be in path order) 
+    and groups them into distinct chains of filters
+    aka  [A -> B -> C -> D],[G -> H -> I] etc
+    currently a module if in a chain ifs input module is also in that chain
+    so the case  A -> B -> C   and A -> B -> D create as a chain A -> B -> C -> D 
+    It does have the concept of "subchain" where if the input filter is immediately before 
+    it, it keeps the sub chain number, otherwise it increases the sub chain number
+    so in the above A, B C, would be sub chain 0 while D would be sub chain 1
+    """
     chains = []
     for filt_name in filt_names:
-        filt_name = rm_filter_modifiers(filt_name)
+        filt_name,modifier = rm_filter_modifiers(filt_name)
+        if modifier != None and modifier != "ignore":
+            raise ValueError('filter "{}" has a modifier "{}" that this code can not handle'.format(filt_name,modifier))
         filt = getattr(process,filt_name)
         if not is_valid_egid_filt_type(filt): continue
         prev_filt_name = get_prev_filt_name(filt)
- #       print filt_name,prev_filt_name
+
+        filt_data = {'name' : filt_name,'subchain' : 0, 'prev_filt' : prev_filt_name, 'modifier' : modifier}
         if prev_filt_name==None:
-            chains.append([filt_name])
-        found=False
-        for chain in chains:
-            if prev_filt_name in chain:
-                found=True
-                chain.append(filt_name)
+            chains.append([filt_data])
+        else:
+            found=False
+            for chain in chains:
+                if prev_filt_name == chain[-1]['name']:
+                    found=True
+                    filt_data['subchain'] = chain[-1]['subchain']
+                    chain.append(filt_data)
+                elif any( data['name'] == prev_filt_name for data in chain):
+                    found=True
+                    filt_data['subchain'] = chain[-1]['subchain']+1
+                    chain.append(filt_data)
+                if found: break
+                
+            if not found:
+                chains.append([filt_data])
+
     return chains
 
 
@@ -253,21 +285,39 @@ def main():
  #   menu_versions = ["2018_test"]
     hlt_sel = {}
 
-    for version in menu_versions:
-        hlt_menu = "hltMenus/hltMenu_{}.py".format(version)
+    for menu_version in menu_versions:
+        hlt_menu = "hltMenus/hltMenu_{}.py".format(menu_version)
   #      hlt_menu = "testMenu2018.py"
         with open(hlt_menu) as f:
             exec f.read()
         for path_name in process.pathNames().split():
             if path_name.find("HLT_")==0 and is_egamma_path(process,path_name):
+             #   if path_name.find("HLT_Photon42_R9Id85_OR_CaloId24b40e_Iso50T80L_Photon25_AND_HE10_R9Id65_Eta2_Mass15_v")!=0: continue
                 path_sel = get_path_sel(process,path_name)
-                path_name_woversion =  rm_hlt_version(path_name)
-                if path_name_woversion not in hlt_sel:
-                    hlt_sel[path_name_woversion] = {}
-                hlt_sel[path_name_woversion][version] = path_sel
+                path_name_no_ver =  rm_hlt_version(path_name)
+                if path_name_no_ver not in hlt_sel:
+                    hlt_sel[path_name_no_ver] = {}
+                hlt_sel[path_name_no_ver][menu_version] = path_sel
         del process
 
-    print "warning, this is still underconstruction<br> Known issues: ORed paths not listed as ORed, L1 seeding not identified"
+    print '''
+Welcome to the E/g HLT 2016-2018 Path Information Page
+
+This twiki is automatically generated from HLT menus & wbm info, please do not edit this twiki directly as your edits will be lost next time the auto generation script is run. Please contact E/gamma for any edits you wish to make. <br>
+
+warning, this is still underconstruction<br> 
+
+The information on this twiki is thought to be accurate but again as its auto generated, there may be mistakes in edge cases for paths, please let us know if you find any. Additionally, the lumi numbers are approximate and should only be treated as guidence rather than analysis quality numbers. <br>
+
+Known issues: 
+   * this is simply a python file which parses the HLT and tries to print what it things the HLT would do when given this config
+   * variable definations are hard coded and do not evolve in time
+   * code changes in modules may be not taken into account (although unlikely)
+   * does not handle DZ, path leg combination filters
+   * does not handle inferor leptons or anything icky and hadronic
+   * should work for standard paths but werid complex paths may have edge cases
+   * right now does not distingush all cases where there is a discontected filter, that is a filter in the path but the filters after it do not depend on it. So it means you may be requiring an object with Et>50  GeV and an object with H/E<0.15 which is different to an object with Et>50 GeV and H/E <0.15. Think we've got most of them but some remain (and those that remain are likely bugs)
+'''
     print "%TOC%"
     
     path_names = hlt_sel.keys()
