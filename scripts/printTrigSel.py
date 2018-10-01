@@ -131,7 +131,7 @@ class EGammaCut:
             eta_low_edges = filt.absEtaLowEdges.value()
             self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB1").value()[0],filt.getParameter("thrOverEEB1").value()[0],filt.getParameter("thrOverE2EB1").value()[0],rho_term[0],term_op,min_eta=eta_low_edges[0],max_eta=eta_low_edges[1]))
             self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB2").value()[0],filt.getParameter("thrOverEEB2").value()[0],filt.getParameter("thrOverE2EB2").value()[0],rho_term[1],term_op,min_eta=eta_low_edges[1],max_eta=eta_low_edges[2]))
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE1").value()[0],filt.getParameter("thrOverEEE1").value(),filt.getParameter("thrOverE2EE1").value()[0],rho_term[2],term_op,min_eta=eta_low_edges[2],max_eta=eta_low_edges[3]))
+            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE1").value()[0],filt.getParameter("thrOverEEE1").value()[0],filt.getParameter("thrOverE2EE1").value()[0],rho_term[2],term_op,min_eta=eta_low_edges[2],max_eta=eta_low_edges[3]))
             self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE2").value()[0],filt.getParameter("thrOverEEE2").value()[0],filt.getParameter("thrOverE2EE2").value()[0],rho_term[3],term_op,min_eta=eta_low_edges[3],max_eta=2.65))
             
         
@@ -249,7 +249,7 @@ def rm_filter_modifiers(filt_name):
 def is_valid_egid_filt_type(filt): 
     if type(filt).__name__=="EDFilter":
         #so we have a black list rather than a white list so we dont miss new E/gamma ID modules
-        if filt.type_() in ['HLTTriggerTypeFilter','HLTBool','HLTPrescaler','HLTTriggerTypeFilter','HLTL1TSeed',"CaloJetSelector","CandViewCountFilter","CandViewSelector","EtMinCaloJetSelector","EtaRangeCaloJetSelector","HLT1CaloJet","HLT1CaloMET","HLT1PFJet","HLT1PFMET","HLT1PFTau","HLT2PFJetPFJet","HLT2PhotonMET","HLT2PhotonPFMET","HLT2PhotonPFTau","HLT2PhotonPhotonDZ","HLT2PhotonTau","HLTCaloJetTag","HLTCaloJetVBFFilter","HLTEgammaAllCombMassFilter","HLTEgammaCombMassFilter","HLTEgammaDoubleLegCombFilter","HLTElectronMuonInvMassFilter","HLTHtMhtFilter","HLTMhtFilter","HLTMuonIsoFilter","HLTMuonL1TFilter","HLTMuonL2FromL1TPreFilter","HLTMuonL3PreFilter","HLTPFJetCollectionsFilter","HLTPFJetTag","HLTPFTauPairDzMatchFilter","HLTPMMassFilter","JetVertexChecker","LargestEtCaloJetSelector","PFTauSelector","PrimaryVertexObjectFilter","VertexSelector",'HLTEgammaL1TMatchFilterRegional','HLTEgammaTriggerFilterObjectWrapper',"HLT2PhotonMuonDZ","HLT2MuonPhotonDZ","MuonSelector","HLTMuonDimuonL3Filter","HLTDisplacedmumuFilter","HLTMuonTrkL1TFilter","HLT2MuonMuonDZ","HLTPFJetVBFFilter"]: return False
+        if filt.type_() in ['HLTTriggerTypeFilter','HLTBool','HLTPrescaler','HLTTriggerTypeFilter','HLTL1TSeed',"CaloJetSelector","CandViewCountFilter","CandViewSelector","EtMinCaloJetSelector","EtaRangeCaloJetSelector","HLT1CaloJet","HLT1CaloMET","HLT1PFJet","HLT1PFMET","HLT1PFTau","HLT2PFJetPFJet","HLT2PhotonMET","HLT2PhotonPFMET","HLT2PhotonPFTau","HLT2PhotonPhotonDZ","HLT2PhotonTau","HLTCaloJetTag","HLTCaloJetVBFFilter","HLTEgammaAllCombMassFilter","HLTEgammaCombMassFilter","HLTEgammaDoubleLegCombFilter","HLTElectronMuonInvMassFilter","HLTHtMhtFilter","HLTMhtFilter","HLTMuonIsoFilter","HLTMuonL1TFilter","HLTMuonL2FromL1TPreFilter","HLTMuonL3PreFilter","HLTPFJetCollectionsFilter","HLTPFJetTag","HLTPFTauPairDzMatchFilter","HLTPMMassFilter","JetVertexChecker","LargestEtCaloJetSelector","PFTauSelector","PrimaryVertexObjectFilter","VertexSelector",'HLTEgammaL1TMatchFilterRegional','HLTEgammaTriggerFilterObjectWrapper',"HLT2PhotonMuonDZ","HLT2MuonPhotonDZ","MuonSelector","HLTMuonDimuonL3Filter","HLTDisplacedmumuFilter","HLTMuonTrkL1TFilter","HLT2MuonMuonDZ","HLTPFJetVBFFilter","DetectorStateFilter"]: return False
         else: return True
     else: return False
 
@@ -356,8 +356,7 @@ def main():
 #    mod = importlib.import_module(args.hlt_menu_name)
 #    process = getattr(mod,"process")
 
-    menu_versions = ["2016_v1p1","2016_v1p2","2016_v2p1","2016_v2p2","2016_v3p0","2016_v3p1","2016_v4p1","2016_v4p2"]
-    menu_versions = ["2017_v1p1","2017_v1p2","2017_v2p0","2017_v2p1","2017_v2p2","2017_v3p0","2017_v3p1","2017_v3p2","2017_v4p0","2017_v4p1","2017_v4p2"]
+    menu_versions = ["2016_v1p1","2016_v1p2","2016_v2p1","2016_v2p2","2016_v3p0","2016_v3p1","2016_v4p1","2016_v4p2","2017_v1p1","2017_v1p2","2017_v2p0","2017_v2p1","2017_v2p2","2017_v3p0","2017_v3p1","2017_v3p2","2017_v4p0","2017_v4p1","2017_v4p2","2018_v1p1","2018_v1p2","2018_v2p0","2018_v2p1","2018_v2p2","2018_v3p0","2018_v3p1","2018_v3p3","2018_v3p4","2018_v3p5","2018_v3p6"]
  #   menu_versions = ["2018_test"]
     hlt_sel = {}
 
@@ -390,6 +389,9 @@ Known issues:
    * this is simply a python file which parses the HLT and tries to print what it things the HLT would do when given this config
    * variable definations are hard coded and do not evolve in time
       * main issue is tracking when rho correction went from variable to filter
+      * also tracking when the endcap cuts are disabled in 2018
+   * paths moving dataset is only tracker per year basis and so it if moves in the year, this will not be recorded
+      * only happens in 2017 for HLT_DoubleMu20_7_Mass0to30_Photon23_v which migrates from DoubleMuon -> MuonEG
    * code changes in modules may be not taken into account (although unlikely)
    * there is some disagreement on what constitutes barrel/endcap start end (eg 1.479, 1.5 , 2.5, 2.65) so to make life easier, we fuzz those boundaries so exact eta values may be slightly off,to be fixed
    * does not handle DZ, path leg combination filters
