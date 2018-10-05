@@ -40,6 +40,46 @@ def get_nice_var_name(name):
         "hltEgammaPixelMatchVars:s2" : "PM S2",
     }.get(name, str(name))  
 
+def is_cut_disabled(process,filt):
+    '''
+    This function adjusts the filter parameters to uniform it throughtout the years
+    where this makes sense
+    The major reason for this is deadling with varaibles which move their rho correction from the variable to the filter and also for the track matching which centrally disables the values
+    '''
+    
+
+    if "varTag" in filt.parameterNames_():
+        var_producer_name = filt.getParameter("varTag").value().split(":")[0]
+    elif "isoTag" in filt.parameterNames_():
+        var_producer_name = filt.getParameter("isoTag").value().split(":")[0]
+    else:
+        raise AttributeError("can not get varaible for filt: "+str(filt))
+    
+    disable_barrel=False
+    disable_endcap=False
+    if var_producer_name.find("hltEgammaGsfTrackVars")==0:
+        var_producer = getattr(process,var_producer_name)
+        try:
+            disable_barrel = var_producer.useDefaultValuesForBarrel.value()
+        except AttributeError:
+            pass
+        try:
+            disable_endcap = var_producer.useDefaultValuesForEndcap.value()
+        except AttributeError:
+            pass
+
+    return disable_barrel,disable_endcap
+    
+class EGammaDisabledCut:
+    def __init__(self,min_eta = 0, max_eta = 2.65):
+        self.min_eta = min_eta
+        self.max_eta = max_eta
+    def valid_for_eta(self,eta):
+        return eta >= self.min_eta and eta< self.max_eta
+
+    def __str__(self):
+        return "disabled"
+
 
 class EGammaStdCut:
     def __init__(self,op_type="",divide_by_var="E",const_term=-1.0,linear_term=-1.0,quad_term=-1.0,rho_term=0,term_combine_op="||",min_eta = 0, max_eta = 2.65):
@@ -99,7 +139,7 @@ class EGammaStdCut:
         return str(self)
 
 class EGammaCut:
-    def __init__(self,filt=None,subchain=0,ignored=False):
+    def __init__(self,filt=None,subchain=0,ignored=False,process=None):
         self.subchain = subchain
         self.ignored = ignored
         if filt.type_()=="HLTElectronPixelMatchFilter":
@@ -129,10 +169,18 @@ class EGammaCut:
             term_op = "+"
             rho_term = filt.effectiveAreas.value() if filt.doRhoCorrection.value()  else [0.,0.]
             eta_low_edges = filt.absEtaLowEdges.value()
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB1").value()[0],filt.getParameter("thrOverEEB1").value()[0],filt.getParameter("thrOverE2EB1").value()[0],rho_term[0],term_op,min_eta=eta_low_edges[0],max_eta=eta_low_edges[1]))
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB2").value()[0],filt.getParameter("thrOverEEB2").value()[0],filt.getParameter("thrOverE2EB2").value()[0],rho_term[1],term_op,min_eta=eta_low_edges[1],max_eta=eta_low_edges[2]))
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE1").value()[0],filt.getParameter("thrOverEEE1").value()[0],filt.getParameter("thrOverE2EE1").value()[0],rho_term[2],term_op,min_eta=eta_low_edges[2],max_eta=eta_low_edges[3]))
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE2").value()[0],filt.getParameter("thrOverEEE2").value()[0],filt.getParameter("thrOverE2EE2").value()[0],rho_term[3],term_op,min_eta=eta_low_edges[3],max_eta=2.65))
+            
+            disabled_barrel,disabled_endcap = is_cut_disabled(process,filt)
+            if not disabled_barrel:
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB1").value()[0],filt.getParameter("thrOverEEB1").value()[0],filt.getParameter("thrOverE2EB1").value()[0],rho_term[0],term_op,min_eta=eta_low_edges[0],max_eta=eta_low_edges[1]))
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB2").value()[0],filt.getParameter("thrOverEEB2").value()[0],filt.getParameter("thrOverE2EB2").value()[0],rho_term[1],term_op,min_eta=eta_low_edges[1],max_eta=eta_low_edges[2]))
+            else:
+                self.cuts.append(EGammaDisabledCut(min_eta=0,max_eta=1.479))
+            if not disabled_endcap:
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE1").value()[0],filt.getParameter("thrOverEEE1").value()[0],filt.getParameter("thrOverE2EE1").value()[0],rho_term[2],term_op,min_eta=eta_low_edges[2],max_eta=eta_low_edges[3]))
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE2").value()[0],filt.getParameter("thrOverEEE2").value()[0],filt.getParameter("thrOverE2EE2").value()[0],rho_term[3],term_op,min_eta=eta_low_edges[3],max_eta=2.65))
+            else:
+                self.cuts.append(EGammaDisabledCut(min_eta=1.479,max_eta=2.65))
             
         
         
@@ -155,18 +203,33 @@ class EGammaCut:
             except AttributeError:
                 #no rho correction...
                 rho_term = [0.,0.]
+
+            disabled_barrel,disabled_endcap = is_cut_disabled(process,filt)
+
             if "energyLowEdges" in filt.parameterNames_():
                 #2017 style filters where we bin for some reason as a function of E
                 #right we're going to simplify this and limit ourselfs to certain cases
                 #mainly as I think other cases wont occur and so not to waste time coding for them
                 if len(filt.energyLowEdges.value())!=1 or filt.energyLowEdges.value()[0]!=0.:
                     raise ValueError("can only handle the case of a single energy threshold at zero, for "+str(filt)+" got "+str(filt.energyLowEdges.value()))
-                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value()[0],filt.getParameter("thrOverEEB").value()[0],filt.getParameter("thrOverE2EB").value()[0],rho_term[0],term_op,min_eta=0,max_eta=1.479))
-                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value()[0],filt.getParameter("thrOverEEE").value()[0],filt.getParameter("thrOverE2EE").value()[0],rho_term[1],term_op,min_eta=0,max_eta=2.65))
+                if not disabled_barrel:
+                    self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value()[0],filt.getParameter("thrOverEEB").value()[0],filt.getParameter("thrOverE2EB").value()[0],rho_term[0],term_op,min_eta=0,max_eta=1.479))
+                else: 
+                    self.cuts.append(EGammaDisabledCut(min_eta=0,max_eta=1.479))
+                if not disabled_endcap:
+                    self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value()[0],filt.getParameter("thrOverEEE").value()[0],filt.getParameter("thrOverE2EE").value()[0],rho_term[1],term_op,min_eta=0,max_eta=2.65))
+                else:
+                    self.cuts.append(EGammaDisabledCut(min_eta=1.479,max_eta=2.65))
            
             else:
-                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value(),filt.getParameter("thrOverEEB").value(),filt.getParameter("thrOverE2EB").value(),rho_term[0],term_op,min_eta=0,max_eta=1.479))
-                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value(),filt.getParameter("thrOverEEE").value(),filt.getParameter("thrOverE2EE").value(),rho_term[1],term_op,min_eta=0,max_eta=2.65))
+                if not disabled_barrel:
+                    self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value(),filt.getParameter("thrOverEEB").value(),filt.getParameter("thrOverE2EB").value(),rho_term[0],term_op,min_eta=0,max_eta=1.479))
+                else:
+                    self.cuts.append(EGammaDisabledCut(min_eta=0,max_eta=1.479))
+                if not disabled_endcap:
+                    self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value(),filt.getParameter("thrOverEEE").value(),filt.getParameter("thrOverE2EE").value(),rho_term[1],term_op,min_eta=0,max_eta=2.65))
+                else:
+                    self.cuts.append(EGammaDisabledCut(min_eta=1.479,max_eta=2.65))
          
     def eta_bins(self):
         eta_set = set()
@@ -214,8 +277,8 @@ class EGammaCutColl:
                 self.eta_bins[-1] = min(self.eta_bins[-1],filt.getParameter("MaxEta").value())
                 self.l1_seeded = filt.getParameter("inputTag").value().find("Unseeded")==-1
             else:
-                self.cuts.append(EGammaCut(filt,subchain=filter_name['subchain'],ignored=filter_name['modifier']=="ignore"
-))
+                
+                self.cuts.append(EGammaCut(filt,subchain=filter_name['subchain'],ignored=filter_name['modifier']=="ignore",process=process))
                 self.ncands = max(self.ncands,filt.getParameter("ncandcut").value())
                 cut_eta_bins =  self.cuts[-1].eta_bins()
                 for eta in cut_eta_bins:
@@ -357,6 +420,7 @@ def main():
 #    process = getattr(mod,"process")
 
     menu_versions = ["2016_v1p1","2016_v1p2","2016_v2p1","2016_v2p2","2016_v3p0","2016_v3p1","2016_v4p1","2016_v4p2","2017_v1p1","2017_v1p2","2017_v2p0","2017_v2p1","2017_v2p2","2017_v3p0","2017_v3p1","2017_v3p2","2017_v4p0","2017_v4p1","2017_v4p2","2018_v1p1","2018_v1p2","2018_v2p0","2018_v2p1","2018_v2p2","2018_v3p0","2018_v3p1","2018_v3p3","2018_v3p4","2018_v3p5","2018_v3p6"]
+  #  menu_version = ["2018_v1p1"]
  #   menu_versions = ["2018_test"]
     hlt_sel = {}
 
