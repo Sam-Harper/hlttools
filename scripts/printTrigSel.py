@@ -38,18 +38,57 @@ def get_nice_var_name(name):
         "hltEgammaSolidTrackIso": "Pho Trk Iso (solid cone, cone<0.29)",
         "hltEgammaHoverERhoCorr" : "H (for H/E, cone<0.14, rho corr)",
         "hltEgammaPixelMatchVars:s2" : "PM S2",
-        
-        
-
     }.get(name, str(name))  
 
+def is_cut_disabled(process,filt):
+    '''
+    This function adjusts the filter parameters to uniform it throughtout the years
+    where this makes sense
+    The major reason for this is deadling with varaibles which move their rho correction from the variable to the filter and also for the track matching which centrally disables the values
+    '''
+    
+
+    if "varTag" in filt.parameterNames_():
+        var_producer_name = filt.getParameter("varTag").value().split(":")[0]
+    elif "isoTag" in filt.parameterNames_():
+        var_producer_name = filt.getParameter("isoTag").value().split(":")[0]
+    else:
+        raise AttributeError("can not get varaible for filt: "+str(filt))
+    
+    disable_barrel=False
+    disable_endcap=False
+    if var_producer_name.find("hltEgammaGsfTrackVars")==0:
+        var_producer = getattr(process,var_producer_name)
+        try:
+            disable_barrel = var_producer.useDefaultValuesForBarrel.value()
+        except AttributeError:
+            pass
+        try:
+            disable_endcap = var_producer.useDefaultValuesForEndcap.value()
+        except AttributeError:
+            pass
+
+    return disable_barrel,disable_endcap
+    
+class EGammaDisabledCut:
+    def __init__(self,min_eta = 0, max_eta = 2.65):
+        self.min_eta = min_eta
+        self.max_eta = max_eta
+    def valid_for_eta(self,eta):
+        return eta >= self.min_eta and eta< self.max_eta
+
+    def __str__(self):
+        return "disabled"
+
+
 class EGammaStdCut:
-    def __init__(self,op_type="",divide_by_var="E",const_term=-1.0,linear_term=-1.0,quad_term=-1.0,term_combine_op="||",min_eta = 0, max_eta = 2.65):
+    def __init__(self,op_type="",divide_by_var="E",const_term=-1.0,linear_term=-1.0,quad_term=-1.0,rho_term=0,term_combine_op="||",min_eta = 0, max_eta = 2.65):
         self.op_type = op_type
         self.divide_by_var = divide_by_var
         self.const_term = const_term
         self.linear_term = linear_term
         self.quad_term = quad_term
+        self.rho_term = rho_term
         self.term_combine_op = term_combine_op
         self.min_eta = min_eta
         self.max_eta = max_eta
@@ -61,16 +100,33 @@ class EGammaStdCut:
         label_str = "{}".format(self.op_type)
         first_term = True
         ignore_value = -1.0 if self.term_combine_op=="||" else 0.
+        #do we need to rho_corr the individual terms (ie when ORing) or can we just at it at the end
+        rho_corr_terms = self.term_combine_op=="||" and self.rho_term != 0.
         if self.const_term!=ignore_value:
-            label_str+=" {}".format(self.const_term)
+            if rho_corr_terms:
+                label_str+=" {} + {}*rho".format(self.const_term,self.rho_term)
+            else:
+                label_str+=" {}".format(self.const_term)
             first_term = False
         if self.linear_term!=ignore_value:
             if not first_term: label_str+=" {} ".format(self.term_combine_op)
-            label_str+=" {} * {}".format(self.linear_term,self.divide_by_var)
+            if rho_corr_terms:
+                label_str+=" ({} + {}*rho) * {}".format(self.linear_term,self.rho_term,self.divide_by_var)
+            else:
+                label_str+=" {} * {}".format(self.linear_term,self.divide_by_var)
+
             first_term = False
         if self.quad_term!=ignore_value:
             if not first_term: label_str+=" {} ".format(self.term_combine_op)
-            label_str+=" {} * {}^{{2}}".format(self.quad_term,self.divide_by_var)
+            if rho_corr_terms:
+                label_str+=" ({} + {}*rho) * {}^{{2}}".format(self.quad_term,self.rho_term,self.divide_by_var)
+            else:
+                label_str+=" {} * {}^{{2}}".format(self.quad_term,self.divide_by_var)
+
+            first_term = False
+
+        if  not rho_corr_terms and self.rho_term!=0.:
+            label_str+=" + {}*rho".format(self.rho_term)
             first_term = False
 
         #we need to deal with the special case where its all zeros
@@ -83,7 +139,7 @@ class EGammaStdCut:
         return str(self)
 
 class EGammaCut:
-    def __init__(self,filt=None,subchain=0,ignored=False):
+    def __init__(self,filt=None,subchain=0,ignored=False,process=None):
         self.subchain = subchain
         self.ignored = ignored
         if filt.type_()=="HLTElectronPixelMatchFilter":
@@ -93,7 +149,41 @@ class EGammaCut:
                 s2_cal = lambda x : "{:.1f}".format((math.atanh(x)*10)**2) if x<1.0 else "inf" if x==1.0 else "-inf"  
                 cut+=" with old s2 < {} BPIX, < {} BPIX-FPIX, < {} FPIX".format( s2_cal(filt.tanhSO10BarrelThres.value()),s2_cal(filt.tanhSO10InterThres.value()),s2_cal(filt.tanhSO10ForwardThres.value()))
             self.cuts = [cut]
+        elif filt.type_()=="HLTDisplacedEgammaFilter":
+            self.var = "displaced ID"
+            self.cuts = "pass"
             
+        elif filt.type_()=="HLTEgammaGenericQuadraticEtaFilter":
+            self.cuts = []  
+            self.var = get_nice_var_name(filt.getParameter("varTag").value().replace("Unseeded","")) 
+            #right we're going to simplify this and limit ourselfs to certain cases
+            #mainly as I think other cases wont occur and so not to waste time coding for them
+            if len(filt.energyLowEdges.value())!=1 or filt.energyLowEdges.value()[0]!=0.:
+                raise ValueError("can only handle the case of a single energy threshold at zero, for "+str(filt)+" got "+str(filt.energyLowEdges.value()))
+            if len(filt.absEtaLowEdges.value())!=4 or filt.etaBoundaryEB12.value()!=filt.absEtaLowEdges.value()[1] or filt.etaBoundaryEE12.value()!=filt.absEtaLowEdges.value()[3] or filt.absEtaLowEdges.value()[0]!=0. or filt.absEtaLowEdges.value()[2]!=1.479:
+                raise ValueError("can only handle the case where the rho corr bins are exactly the same as a cut bins\n"+filt.dumpPython())
+            
+
+            op_str = "<=" if filt.lessThan.value() else ">="
+            et_str = "E_{T}" if filt.useEt.value() else "E" 
+            term_op = "+"
+            rho_term = filt.effectiveAreas.value() if filt.doRhoCorrection.value()  else [0.,0.]
+            eta_low_edges = filt.absEtaLowEdges.value()
+            
+            disabled_barrel,disabled_endcap = is_cut_disabled(process,filt)
+            if not disabled_barrel:
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB1").value()[0],filt.getParameter("thrOverEEB1").value()[0],filt.getParameter("thrOverE2EB1").value()[0],rho_term[0],term_op,min_eta=eta_low_edges[0],max_eta=eta_low_edges[1]))
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB2").value()[0],filt.getParameter("thrOverEEB2").value()[0],filt.getParameter("thrOverE2EB2").value()[0],rho_term[1],term_op,min_eta=eta_low_edges[1],max_eta=eta_low_edges[2]))
+            else:
+                self.cuts.append(EGammaDisabledCut(min_eta=0,max_eta=1.479))
+            if not disabled_endcap:
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE1").value()[0],filt.getParameter("thrOverEEE1").value()[0],filt.getParameter("thrOverE2EE1").value()[0],rho_term[2],term_op,min_eta=eta_low_edges[2],max_eta=eta_low_edges[3]))
+                self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE2").value()[0],filt.getParameter("thrOverEEE2").value()[0],filt.getParameter("thrOverE2EE2").value()[0],rho_term[3],term_op,min_eta=eta_low_edges[3],max_eta=2.65))
+            else:
+                self.cuts.append(EGammaDisabledCut(min_eta=1.479,max_eta=2.65))
+            
+        
+        
         else:
         #    print filt,filt.type_()
             if "varTag" in filt.parameterNames_():
@@ -108,9 +198,49 @@ class EGammaCut:
             op_str = "<=" if filt.getParameter("lessThan").value() else ">="
             et_str = "E_{T}" if filt.getParameter("useEt").value() else "E" 
             term_op = "||" if  filt.type_() == "HLTEgammaGenericFilter" else "+"
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value(),filt.getParameter("thrOverEEB").value(),filt.getParameter("thrOverE2EB").value(),term_op,min_eta=0,max_eta=1.479))
-            self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value(),filt.getParameter("thrOverEEE").value(),filt.getParameter("thrOverE2EE").value(),term_op,min_eta=0,max_eta=2.65))
+            try:
+                rho_term = filt.effectiveAreas.value() if filt.doRhoCorrection.value()  else [0.,0.]
+            except AttributeError:
+                #no rho correction...
+                rho_term = [0.,0.]
+
+            disabled_barrel,disabled_endcap = is_cut_disabled(process,filt)
+
+            if "energyLowEdges" in filt.parameterNames_():
+                #2017 style filters where we bin for some reason as a function of E
+                #right we're going to simplify this and limit ourselfs to certain cases
+                #mainly as I think other cases wont occur and so not to waste time coding for them
+                if len(filt.energyLowEdges.value())!=1 or filt.energyLowEdges.value()[0]!=0.:
+                    raise ValueError("can only handle the case of a single energy threshold at zero, for "+str(filt)+" got "+str(filt.energyLowEdges.value()))
+                if not disabled_barrel:
+                    self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value()[0],filt.getParameter("thrOverEEB").value()[0],filt.getParameter("thrOverE2EB").value()[0],rho_term[0],term_op,min_eta=0,max_eta=1.479))
+                else: 
+                    self.cuts.append(EGammaDisabledCut(min_eta=0,max_eta=1.479))
+                if not disabled_endcap:
+                    self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value()[0],filt.getParameter("thrOverEEE").value()[0],filt.getParameter("thrOverE2EE").value()[0],rho_term[1],term_op,min_eta=0,max_eta=2.65))
+                else:
+                    self.cuts.append(EGammaDisabledCut(min_eta=1.479,max_eta=2.65))
            
+            else:
+                if not disabled_barrel:
+                    self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEB").value(),filt.getParameter("thrOverEEB").value(),filt.getParameter("thrOverE2EB").value(),rho_term[0],term_op,min_eta=0,max_eta=1.479))
+                else:
+                    self.cuts.append(EGammaDisabledCut(min_eta=0,max_eta=1.479))
+                if not disabled_endcap:
+                    self.cuts.append(EGammaStdCut(op_str,et_str,filt.getParameter("thrRegularEE").value(),filt.getParameter("thrOverEEE").value(),filt.getParameter("thrOverE2EE").value(),rho_term[1],term_op,min_eta=0,max_eta=2.65))
+                else:
+                    self.cuts.append(EGammaDisabledCut(min_eta=1.479,max_eta=2.65))
+         
+    def eta_bins(self):
+        eta_set = set()
+        for cut in self.cuts:
+            try:
+                eta_set.add(cut.min_eta)
+                eta_set.add(cut.max_eta)
+            except AttributeError:
+                pass
+        return eta_set
+
     def get_cut(self,eta):
         for cut in self.cuts:
             try:
@@ -129,7 +259,7 @@ class EGammaCutColl:
         self.min_et_eb = 0
         self.min_et_ee = 0
 
-    def fill(self,process,filter_names,l1_seeded=True):
+    def fill(self,process,filter_names):
         for filter_name in filter_names:
             filt = getattr(process,filter_name['name'])
             if filt.type_() == "HLTEgammaEtFilter":
@@ -147,9 +277,15 @@ class EGammaCutColl:
                 self.eta_bins[-1] = min(self.eta_bins[-1],filt.getParameter("MaxEta").value())
                 self.l1_seeded = filt.getParameter("inputTag").value().find("Unseeded")==-1
             else:
-                self.cuts.append(EGammaCut(filt,subchain=filter_name['subchain'],ignored=filter_name['modifier']=="ignore"
-))
+                
+                self.cuts.append(EGammaCut(filt,subchain=filter_name['subchain'],ignored=filter_name['modifier']=="ignore",process=process))
                 self.ncands = max(self.ncands,filt.getParameter("ncandcut").value())
+                cut_eta_bins =  self.cuts[-1].eta_bins()
+                for eta in cut_eta_bins:
+                    #filters tend to have a slight disagreement where the barrel/endcap start end is
+                    #so we fuzz it
+                    if eta not in self.eta_bins and eta<2.5 and not(eta>1.47 and eta<1.55): self.eta_bins.append(eta)
+                self.eta_bins.sort()
 
     def __str__(self):
         out_str = "E_{{T}} > {} GeV (EB), > {} GeV (EE), #cands = {}, L1 seeded = {}\n".format(self.min_et_eb,self.min_et_ee,self.ncands,self.l1_seeded)
@@ -176,13 +312,15 @@ def rm_filter_modifiers(filt_name):
 def is_valid_egid_filt_type(filt): 
     if type(filt).__name__=="EDFilter":
         #so we have a black list rather than a white list so we dont miss new E/gamma ID modules
-        if filt.type_() in ['HLTTriggerTypeFilter','HLTBool','HLTPrescaler','HLTTriggerTypeFilter','HLTL1TSeed',"CaloJetSelector","CandViewCountFilter","CandViewSelector","EtMinCaloJetSelector","EtaRangeCaloJetSelector","HLT1CaloJet","HLT1CaloMET","HLT1PFJet","HLT1PFMET","HLT1PFTau","HLT2PFJetPFJet","HLT2PhotonMET","HLT2PhotonPFMET","HLT2PhotonPFTau","HLT2PhotonPhotonDZ","HLT2PhotonTau","HLTCaloJetTag","HLTCaloJetVBFFilter","HLTEgammaAllCombMassFilter","HLTEgammaCombMassFilter","HLTEgammaDoubleLegCombFilter","HLTElectronMuonInvMassFilter","HLTHtMhtFilter","HLTMhtFilter","HLTMuonIsoFilter","HLTMuonL1TFilter","HLTMuonL2FromL1TPreFilter","HLTMuonL3PreFilter","HLTPFJetCollectionsFilter","HLTPFJetTag","HLTPFTauPairDzMatchFilter","HLTPMMassFilter","JetVertexChecker","LargestEtCaloJetSelector","PFTauSelector","PrimaryVertexObjectFilter","VertexSelector",'HLTEgammaL1TMatchFilterRegional','HLTEgammaTriggerFilterObjectWrapper',"HLT2PhotonMuonDZ","HLT2MuonPhotonDZ","MuonSelector","HLTMuonDimuonL3Filter","HLTDisplacedmumuFilter"]: return False
+        if filt.type_() in ['HLTTriggerTypeFilter','HLTBool','HLTPrescaler','HLTTriggerTypeFilter','HLTL1TSeed',"CaloJetSelector","CandViewCountFilter","CandViewSelector","EtMinCaloJetSelector","EtaRangeCaloJetSelector","HLT1CaloJet","HLT1CaloMET","HLT1PFJet","HLT1PFMET","HLT1PFTau","HLT2PFJetPFJet","HLT2PhotonMET","HLT2PhotonPFMET","HLT2PhotonPFTau","HLT2PhotonPhotonDZ","HLT2PhotonTau","HLTCaloJetTag","HLTCaloJetVBFFilter","HLTEgammaAllCombMassFilter","HLTEgammaCombMassFilter","HLTEgammaDoubleLegCombFilter","HLTElectronMuonInvMassFilter","HLTHtMhtFilter","HLTMhtFilter","HLTMuonIsoFilter","HLTMuonL1TFilter","HLTMuonL2FromL1TPreFilter","HLTMuonL3PreFilter","HLTPFJetCollectionsFilter","HLTPFJetTag","HLTPFTauPairDzMatchFilter","HLTPMMassFilter","JetVertexChecker","LargestEtCaloJetSelector","PFTauSelector","PrimaryVertexObjectFilter","VertexSelector",'HLTEgammaL1TMatchFilterRegional','HLTEgammaTriggerFilterObjectWrapper',"HLT2PhotonMuonDZ","HLT2MuonPhotonDZ","MuonSelector","HLTMuonDimuonL3Filter","HLTDisplacedmumuFilter","HLTMuonTrkL1TFilter","HLT2MuonMuonDZ","HLTPFJetVBFFilter","DetectorStateFilter"]: return False
         else: return True
     else: return False
 
 def get_prev_filt_name(filt):
-    if filt.type_() in ['HLTEgammaGenericFilter','HLTEgammaGenericQuadraticFilter','HLTElectronPixelMatchFilter']:
+    if filt.type_() in ['HLTEgammaGenericFilter','HLTEgammaGenericQuadraticFilter','HLTElectronPixelMatchFilter','HLTEgammaGenericQuadraticEtaFilter']:
         return filt.candTag.value()
+    elif filt.type_() in ['HLTDisplacedEgammaFilter']:
+        return filt.inputTag.value();
     elif filt.type_() in ['HLTEgammaL1TMatchFilterRegional','HLT1Photon','HLTEgammaTriggerFilterObjectWrapper']:
         return None
     elif filt.type_() in ['HLTEgammaEtFilter']:
@@ -247,7 +385,7 @@ def get_path_sel(process,path_name):
     chains_filter_names = split_into_chains(process,str(path).split("+"))
     for chain in chains_filter_names:
         cutcoll = EGammaCutColl()
-        cutcoll.fill(l1_seeded=True,process=process,filter_names=chain)
+        cutcoll.fill(process=process,filter_names=chain)
            
         sel_str += str(cutcoll) +"\n"
     return sel_str
@@ -281,7 +419,8 @@ def main():
 #    mod = importlib.import_module(args.hlt_menu_name)
 #    process = getattr(mod,"process")
 
-    menu_versions = ["2016_v1p1","2016_v1p2","2016_v2p1","2016_v2p2","2016_v3p0","2016_v3p1","2016_v4p1","2016_v4p2"]
+    menu_versions = ["2016_v1p1","2016_v1p2","2016_v2p1","2016_v2p2","2016_v3p0","2016_v3p1","2016_v4p1","2016_v4p2","2017_v1p1","2017_v1p2","2017_v2p0","2017_v2p1","2017_v2p2","2017_v3p0","2017_v3p1","2017_v3p2","2017_v4p0","2017_v4p1","2017_v4p2","2018_v1p1","2018_v1p2","2018_v2p0","2018_v2p1","2018_v2p2","2018_v3p0","2018_v3p1","2018_v3p3","2018_v3p4","2018_v3p5","2018_v3p6"]
+  #  menu_version = ["2018_v1p1"]
  #   menu_versions = ["2018_test"]
     hlt_sel = {}
 
@@ -297,7 +436,8 @@ def main():
                 path_name_no_ver =  rm_hlt_version(path_name)
                 if path_name_no_ver not in hlt_sel:
                     hlt_sel[path_name_no_ver] = {}
-                hlt_sel[path_name_no_ver][menu_version] = path_sel
+                    hlt_sel[path_name_no_ver]['selection'] = {}
+                hlt_sel[path_name_no_ver]['selection'][menu_version] = path_sel
         del process
 
     print '''
@@ -312,7 +452,12 @@ The information on this twiki is thought to be accurate but again as its auto ge
 Known issues: 
    * this is simply a python file which parses the HLT and tries to print what it things the HLT would do when given this config
    * variable definations are hard coded and do not evolve in time
+      * main issue is tracking when rho correction went from variable to filter
+      * also tracking when the endcap cuts are disabled in 2018
+   * paths moving dataset is only tracker per year basis and so it if moves in the year, this will not be recorded
+      * only happens in 2017 for HLT_DoubleMu20_7_Mass0to30_Photon23_v which migrates from DoubleMuon -> MuonEG
    * code changes in modules may be not taken into account (although unlikely)
+   * there is some disagreement on what constitutes barrel/endcap start end (eg 1.479, 1.5 , 2.5, 2.65) so to make life easier, we fuzz those boundaries so exact eta values may be slightly off,to be fixed
    * does not handle DZ, path leg combination filters
    * does not handle inferor leptons or anything icky and hadronic
    * should work for standard paths but werid complex paths may have edge cases
@@ -328,13 +473,13 @@ Known issues:
         pre_sel = ""
         for menu_version in menu_versions:
             try:
-                if hlt_sel[path_name][menu_version]==pre_sel:
+                if hlt_sel[path_name]['selection'][menu_version]==pre_sel:
                     ver_str+=", "+menu_version
                 else:
                     if ver_str != "":
                         print "menu versions : {} <br>".format(ver_str)
                         print pre_sel
-                    pre_sel = hlt_sel[path_name][menu_version]
+                    pre_sel = hlt_sel[path_name]['selection'][menu_version]
                     ver_str = str(menu_version)
             except KeyError:
                 pass
