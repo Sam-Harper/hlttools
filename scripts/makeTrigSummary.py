@@ -4,7 +4,9 @@ import os
 import argparse
 import json
 import md5
+import sys
 from FWCore.PythonUtilities.LumiList import LumiList
+from timeit import default_timer as timer
 
 
 class HLTPath :
@@ -19,7 +21,45 @@ class HLTPath :
         self.lumi_active+=lumi_active
         if run < self.first_run: self.first_run = run
         if run > self.last_run: self.last_run = run
+
+
+class L1PreScaleCache :
+    """
+    HLT paths have many seeds and many paths share the same seed. It is time consuming to workout
+    the lowest unprescaled L1 seed and the same information is accessed again so this caches it
+    For each hash of a set of seeds, it stores the lowest prescale factor (with zero counting as 
+    max int as that is effectively what it is) for each prescale column so it can be quickly accessed
+    """
+    def __init__(self,nr_ps_col):
+        self.cache = {}
+        self.nr_ps_col = nr_ps_col
         
+    def lowest_l1_prescale(self,l1_seeds,l1_ps_tbl,ps_col):
+        seeds_md5  = md5.new(l1_seeds).digest()
+        if seeds_md5 not in self.cache:
+            self.cache[seeds_md5] = [0]*self.nr_ps_col
+        seed_cache = self.cache[seeds_md5]
+        if seed_cache[ps_col]==0:
+            lowest_l1_ps = int(sys.maxint)
+            seeds_split = l1_seeds.split(" OR ") 
+            #iterating through the list backwards is faster as seeds tend to be written in 
+            #assending thresholds which means the last ones are more likely to be unprescaled
+            #and thus the function can end early
+            seeds_split.reverse() 
+            ps_index = int(ps_col)+2
+            for seed in seeds_split:
+                seed = seed.rstrip().lstrip()
+                try:
+                    l1_ps = int(get_l1_prescales(l1_ps_tbl,seed)[int(ps_index)])
+                except TypeError:
+                    print "seed error not found ",seed
+                    print "ps table",l1_ps_tbl
+                    l1_ps = 0
+                if l1_ps !=0 and l1_ps < lowest_l1_ps: lowest_l1_ps = l1_ps
+                if lowest_l1_ps == 1: break #1 is the lowest, no need to keep looking
+            seed_cache[ps_col] = int(lowest_l1_ps)
+        return seed_cache[ps_col]
+            
 
 def uncompact_list(compact_list):
     
@@ -53,21 +93,34 @@ def get_ps_col(ps_cols,lumi):
 
 def get_hlt_prescales(ps_tbl,pathname):
     for line in ps_tbl:
-#        print get_pathname_from_ps_tbl(line[1]), pathname
         if get_pathname_from_ps_tbl(line[1]) == pathname:
-#            print "found ",line
             return line
     return None
 
+def get_nr_ps_col(ps_tbl):
+    """given a prescale table, returns how many columns it has
+    does this by the length of the header
+    detects if its L1 or HLT by the name of the second entry of the header which effects 
+    the translation of header length to number of columns
+    """
+    try:
+        if ps_tbl[0][1]=="L1 Algo Name":
+            offset = -2
+        elif ps_tbl[0][1]=="HLT Path Name":
+            offset = -3
+        else:
+            raise RuntimeError("prescale table header not recognised as L1 or HLT".format(ps_tbl[0]))
 
+        nr_col = len(ps_tbl[0])+offset
+        return nr_col
+    except IndexError:
+        return 0
+        
 def get_l1_prescales(l1_ps_tbl,l1_seed):
     for line in l1_ps_tbl:
         if line[1] == l1_seed:
-#            print "found ",line
             return line
     return None
-#        else:
- #           print line
             
 def get_inst_lumi(run,lumi,pu_data):
     pu_run_data = pu_data[run]
@@ -98,25 +151,20 @@ def get_lowest_l1_prescale(l1_seeds,l1_ps_tbl,ps_col,lowest_l1_ps_cache={}):
         
     return lowest_l1_ps_cache[seeds_md5]
 
-def process_path(hltpath,run,run_data,l1_ps_tbl,hlt_ps_tbl,good_runs_lumis,pu_data):
-    hlt_path_prescales = get_hlt_prescales(hlt_ps_tbl,hltpath.name)
-    ps_cols = run_hlt_data['ps_cols']
 
-    good_lumis = good_runs_lumis.getCompactList()[run]
-    good_lumis_unpacked = uncompact_list(good_lumis)
-    
-    for lumi in good_lumis_unpacked:
-        ps_col = get_ps_col(ps_cols,lumi)
-        if int(ps_col) < 0: print "ps column is <0",run,lumi,ps_col  
-        ps_index = int(ps_col)+2
-        #hlt_path_prescales has the L1 seeds as the last entry
-        l1_prescale = get_lowest_l1_prescale(l1_seeds = hlt_path_prescales[-1],l1_ps_tbl=l1_ps_tbl,ps_col=ps_col)
-        hlt_prescale = int(hlt_path_prescales[ps_index])
-     #   print hltpath.name,l1_prescale,hlt_prescale
-        inst_lumi = get_inst_lumi(run=run,lumi=lumi,pu_data=pu_data)
-        if hlt_prescale!=0:
-            hltpath.fill(inst_lumi/hlt_prescale/l1_prescale,inst_lumi,int(run))
-        
+def process_path(hltpath,run,lumi,ps_col,l1_ps_tbl,hlt_ps_tbl,pu_data,lowest_l1_ps_cache):
+
+    hlt_path_prescales = get_hlt_prescales(hlt_ps_tbl,hltpath.name)
+
+    if int(ps_col) < 0: print "ps column is <0",run,lumi,ps_col  
+    ps_index = int(ps_col)+2
+    #hlt_path_prescales has the L1 seeds as the last entry
+    l1_prescale = lowest_l1_ps_cache.lowest_l1_prescale(l1_seeds=hlt_path_prescales[-1],l1_ps_tbl=l1_ps_tbl,ps_col=int(ps_col))
+    hlt_prescale = int(hlt_path_prescales[ps_index])
+    inst_lumi = get_inst_lumi(run=run,lumi=lumi,pu_data=pu_data)
+    if hlt_prescale!=0:
+        hltpath.fill(inst_lumi/hlt_prescale/l1_prescale,inst_lumi,int(run))
+       
 
 def rm_hlt_version(name):
     version_start = name.rfind("_v")
@@ -208,34 +256,46 @@ if __name__ == '__main__':
 
     hlt_paths = {}
 
+    lowest_l1_prescales = {}
     print "loaded all data, starting processing runs"
-    
-    for run in runs:
+    start_time = timer()
+    nr_runs = len(runs)
+    for run_indx,run in enumerate(runs):
+        print "processing run {} {} / {} time: {:.1f}s".format(run,run_indx,nr_runs,timer()-start_time)
         if int(run) < args.min_runnr or int(run) > args.max_runnr: continue
             
         if not good_lumis.contains(int(run)): continue
         run_hlt_data = hlt_data[run]
         hlt_menu = run_hlt_data["hlt_menu"]
+        trig_mode = run_hlt_data["trig_mode"]
 
-       # print "start",run,hlt_menu
-       # for key in run_hlt_data.keys():
-       #     print "   *",key,run_hlt_data[key]
-        l1_ps_tbl = l1_ps_data[run_hlt_data["trig_mode"]]
+        l1_ps_tbl = l1_ps_data[trig_mode]
         hlt_ps_tbl = hlt_ps_data[hlt_menu]
+        
+        if trig_mode not in lowest_l1_prescales:
+            lowest_l1_prescales[trig_mode] = L1PreScaleCache(get_nr_ps_col(l1_ps_tbl))
+        runs_lowest_l1_ps = lowest_l1_prescales[trig_mode]
+        
 
-#        l1_prescales = make_fast_l1_ps_tbl(l1_ps_data[run_hlt_data["l1_key"]])
+        good_lumis_compact = good_lumis.getCompactList()[run]
+        good_lumis_unpacked = uncompact_list(good_lumis_compact)
+        ps_cols = run_hlt_data['ps_cols']
 
-        for line in hlt_ps_tbl:
-            hlt_pathname = get_pathname_from_ps_tbl(line[1]) 
-            if hlt_pathname.find("HLT_")==0 and (hlt_pathname.find("Ele")!=-1 or hlt_pathname.find("Pho")!=-1 or hlt_pathname.find("pho")!=-1 or hlt_pathname.find("SC")!=-1):
-                if hlt_pathname not in hlt_paths:
-                    hlt_paths[hlt_pathname]=HLTPath(hlt_pathname)
-                hlt_path = hlt_paths[hlt_pathname]
-                process_path(hlt_path,run,run_hlt_data,l1_ps_tbl,hlt_ps_tbl,good_lumis,pu_data)
+        for lumi in good_lumis_unpacked:
+            lowest_l1_ps_cache = {}
+            ps_col = get_ps_col(ps_cols,lumi)
+
+            for line in hlt_ps_tbl:
+                hlt_pathname = get_pathname_from_ps_tbl(line[1]) 
+                if hlt_pathname.find("HLT_")==0 and (hlt_pathname.find("Ele")!=-1 or hlt_pathname.find("Pho")!=-1 or hlt_pathname.find("pho")!=-1 or hlt_pathname.find("SC")!=-1):
+                   # if hlt_pathname.find("HLT_Mu8_DiEle12_CaloIdL_TrackIdL_")!=0: continue
+                    if hlt_pathname not in hlt_paths:
+                        hlt_paths[hlt_pathname]=HLTPath(hlt_pathname)
+                    hlt_path = hlt_paths[hlt_pathname]
+                    process_path(hlt_path,run,lumi,ps_col,l1_ps_tbl,hlt_ps_tbl,pu_data,runs_lowest_l1_ps)
 
     hlt_path_names = hlt_paths.keys()
     hlt_path_names.sort()
-
     datasets = {}
     for hlt_path  in hlt_path_names:
         dataset = path_to_dataset.get(hlt_path,"NotFound")
@@ -252,7 +312,7 @@ if __name__ == '__main__':
     for dataset in dataset_names:
         for hlt_path_name in datasets[dataset]:
 #    for hlt_path_name in hlt_path_names:
-            
+            print hlt_path_name
             hlt_path = hlt_paths[hlt_path_name]
             try:
                 hlt_version = get_hlt_menu_version(hlt_data[str(hlt_path.first_run)]["hlt_menu"])
