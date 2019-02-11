@@ -91,6 +91,15 @@ def get_ps_col(ps_cols,lumi):
 
     return -2
 
+def make_hlt_ps_dict(ps_tbl):
+    ps_dict = {}
+    for line in ps_tbl:
+        pathname =get_pathname_from_ps_tbl(line[1])
+        if pathname in ps_dict:
+            raise RuntimeError("pathname {} already exists in the ps dict".format(pathname))
+        ps_dict[pathname] = line
+    return ps_dict
+
 def get_hlt_prescales(ps_tbl,pathname):
     for line in ps_tbl:
         if get_pathname_from_ps_tbl(line[1]) == pathname:
@@ -152,10 +161,10 @@ def get_lowest_l1_prescale(l1_seeds,l1_ps_tbl,ps_col,lowest_l1_ps_cache={}):
     return lowest_l1_ps_cache[seeds_md5]
 
 
-def process_path(hltpath,run,lumi,ps_col,l1_ps_tbl,hlt_ps_tbl,pu_data,lowest_l1_ps_cache):
-
-    hlt_path_prescales = get_hlt_prescales(hlt_ps_tbl,hltpath.name)
-
+def process_path(hltpath,run,lumi,ps_col,l1_ps_tbl,hlt_ps_dict,pu_data,lowest_l1_ps_cache):
+   
+    hlt_path_prescales = hlt_ps_dict[hltpath.name]
+   
     if int(ps_col) < 0: print "ps column is <0",run,lumi,ps_col  
     ps_index = int(ps_col)+2
     #hlt_path_prescales has the L1 seeds as the last entry
@@ -271,6 +280,7 @@ if __name__ == '__main__':
 
         l1_ps_tbl = l1_ps_data[trig_mode]
         hlt_ps_tbl = hlt_ps_data[hlt_menu]
+        hlt_ps_dict = make_hlt_ps_dict(hlt_ps_tbl)
         
         if trig_mode not in lowest_l1_prescales:
             lowest_l1_prescales[trig_mode] = L1PreScaleCache(get_nr_ps_col(l1_ps_tbl))
@@ -280,6 +290,7 @@ if __name__ == '__main__':
         good_lumis_compact = good_lumis.getCompactList()[run]
         good_lumis_unpacked = uncompact_list(good_lumis_compact)
         ps_cols = run_hlt_data['ps_cols']
+
 
         for lumi in good_lumis_unpacked:
             lowest_l1_ps_cache = {}
@@ -292,7 +303,8 @@ if __name__ == '__main__':
                     if hlt_pathname not in hlt_paths:
                         hlt_paths[hlt_pathname]=HLTPath(hlt_pathname)
                     hlt_path = hlt_paths[hlt_pathname]
-                    process_path(hlt_path,run,lumi,ps_col,l1_ps_tbl,hlt_ps_tbl,pu_data,runs_lowest_l1_ps)
+
+                    process_path(hlt_path,run,lumi,ps_col,l1_ps_tbl,hlt_ps_dict,pu_data,runs_lowest_l1_ps)
 
     hlt_path_names = hlt_paths.keys()
     hlt_path_names.sort()
